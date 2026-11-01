@@ -1,0 +1,7 @@
+## IDF Component Manager Manifest File
+## Since ESP-IDF 6.0 the per-chip Ethernet MAC/PHY drivers are no longer part of
+## esp_eth but are distributed through the Espressif Component Registry.
+## Pinned to the 1.x API line (eth_w5500_config_t with flat int_gpio_num /
+## poll_period_ms). Review before bumping to 2.x, whose config struct differs.
+dependencies:
+  espressif/w5500: "^1.0.1"

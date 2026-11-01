@@ -1,0 +1,114 @@
+name: Build DeepDance Gamma 601 LAN Edition
+
+# Replaces the upstream build/release workflows (they publish to bitaxe's own
+# release bucket and need secrets that do not exist in this repository).
+# Build recipe is taken 1:1 from upstream ESP-Miner v2.15.4 (build.yml and
+# release-factory.yml): Node 24.14.0, ESP-IDF v6.0.2, target esp32s3.
+
+on:
+  push:
+    branches: [ main, 'feature/**' ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: write   # only used to create a release for tag builds
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+        with:
+          submodules: 'recursive'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24.14.0'
+
+      # npm run build regenerates the API client from openapi.yaml first, so the
+      # new /api/system/ethernet endpoint is part of the generated client.
+      - name: Build web dist (AxeOS)
+        working-directory: ./main/http_server/axe-os
+        run: |
+          npm ci
+          npm run build
+
+      - name: esp-idf build
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v6.0.2
+          target: esp32s3
+          command: GITHUB_ACTIONS="true" idf.py build && python tools/test_ca_bundle.py --build-dir build
+          path: '.'
+
+      - name: Generate Gamma 601 factory settings (NVS)
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v6.0.2
+          target: esp32s3
+          command: /opt/esp/idf/components/nvs_flash/nvs_partition_generator/nvs_partition_gen.py generate config-601.cvs config.bin 0x6000
+          path: '.'
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+      - run: pip install esptool
+
+      - name: Collect firmware files and checksums
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME//\//-}"
+          mkdir -p dist
+          # OTA / update image (keeps all settings): upload this in AxeOS -> Update
+          cp build/esp-miner.bin dist/esp-miner.bin
+          # Full flash image for a blank or recovered device (resets settings to config-601)
+          ./merge_bin.sh -c "dist/esp-miner-factory-601-lan-${VERSION}.bin"
+          # Same image without factory settings
+          ./merge_bin.sh "dist/esp-miner-merged-601-lan-${VERSION}.bin"
+          (cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+          ls -l dist
+          echo "Partition table used:" && cat partitions.csv
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deepdance-gamma601-lan-firmware
+          path: dist/*
+
+      - name: Upload build logs (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            build/log/**
+            build/*.log
+            build/CMakeFiles/*.log
+          if-no-files-found: ignore
+
+      - name: Compose release notes
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          cp docs/RELEASE_NOTES.de.md release_body.md
+          printf '\n## SHA256-Prüfsummen\n\n```\n' >> release_body.md
+          cat dist/SHA256SUMS.txt >> release_body.md
+          printf '```\n' >> release_body.md
+
+      # Marked as pre-release on purpose: a successful build does not prove the
+      # W5500 hardware path. Flip it manually after the hardware tests passed.
+      - name: Create GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2.4.2
+        with:
+          name: DeepDance Gamma 601 LAN Edition ${{ github.ref_name }}
+          body_path: release_body.md
+          prerelease: true
+          files: dist/*

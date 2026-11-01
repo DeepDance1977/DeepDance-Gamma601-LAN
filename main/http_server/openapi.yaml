@@ -693,6 +693,73 @@ components:
           items:
             $ref: '#/components/schemas/SystemPartition'
 
+    EthernetStatus:
+      type: object
+      required:
+        - supported
+        - enabled
+        - active
+        - restartRequired
+        - error
+        - linkUp
+        - connected
+        - dhcp
+        - ipv4
+        - netmask
+        - gateway
+        - speedMbps
+        - fullDuplex
+        - mac
+        - wifiConnected
+        - wifiStatus
+        - activeInterface
+      properties:
+        supported:
+          type: boolean
+          description: Whether this board supports the W5500 Ethernet module
+        enabled:
+          type: boolean
+          description: Saved setting (ethernetEnabled)
+        active:
+          type: boolean
+          description: Ethernet driver is running since the last boot
+        restartRequired:
+          type: boolean
+          description: The saved setting differs from the running state; restart to apply
+        error:
+          type: string
+          description: Start error (for example when the module was not detected), empty if none
+        linkUp:
+          type: boolean
+          description: PHY link detected
+        connected:
+          type: boolean
+          description: Link is up and an IPv4 address was received
+        dhcp:
+          type: boolean
+          description: DHCP client is running on the Ethernet interface
+        ipv4:
+          type: string
+        netmask:
+          type: string
+        gateway:
+          type: string
+        speedMbps:
+          type: integer
+          description: Link speed in Mbit/s, 0 if unknown
+        fullDuplex:
+          type: boolean
+        mac:
+          type: string
+        wifiConnected:
+          type: boolean
+        wifiStatus:
+          type: string
+        activeInterface:
+          type: string
+          enum: [ethernet, wifi, none]
+          description: Interface currently used for mining traffic
+
     SystemASIC:
       type: object
       required:
@@ -972,6 +1039,12 @@ components:
           enum: [0, 1]
           examples:
             - 0
+        ethernetEnabled:
+          type: integer
+          description: Enable the W5500 Ethernet interface (0=disabled, 1=enabled). Only effective on supported boards (Gamma 601); applied after a restart. Enabling Ethernet disables BAP because both use GPIO 39/40.
+          enum: [0, 1]
+          examples:
+            - 0
         invertscreen:
           type: integer
           description: Whether to invert screen colors (0=normal, 1=inverted)
@@ -1101,6 +1174,25 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SystemASIC'
+        '401':
+          description: Unauthorized - Client not in allowed network range
+        '500':
+          description: Internal server error
+
+  /api/system/ethernet:
+    get:
+      summary: Get Ethernet (W5500) status
+      description: Returns the state of the wired Ethernet interface and which interface is currently used. Enable or disable Ethernet via PATCH /api/system with ethernetEnabled; the change applies after a restart.
+      operationId: getEthernetStatus
+      tags:
+        - system
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EthernetStatus'
         '401':
           description: Unauthorized - Client not in allowed network range
         '500':

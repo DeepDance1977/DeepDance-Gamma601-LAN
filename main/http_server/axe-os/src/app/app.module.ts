@@ -21,6 +21,7 @@ import { Api } from './generated/api';
 import { ApiConfiguration } from './generated/api-configuration';
 import { EditComponent } from './components/edit/edit.component';
 import { PoolComponent } from './components/pool/pool.component';
+import { EthernetComponent } from './components/ethernet/ethernet.component';
 import { NetworkEditComponent } from './components/network-edit/network.edit.component';
 import { HomeComponent } from './components/home/home.component';
 import { ModalComponent } from './components/modal/modal.component';
@@ -60,7 +61,8 @@ const components = [
   LogsComponent,
   SystemComponent,
   UpdateComponent,
-  PoolComponent
+  PoolComponent,
+  EthernetComponent
 ];
 
 @NgModule({

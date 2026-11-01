@@ -1,0 +1,52 @@
+<div class="card">
+  <h2>LAN / Ethernet</h2>
+
+  @if (unreachable && !status) {
+    <p class="mt-4 text-secondary">Waiting for the device...</p>
+  }
+
+  @if (status) {
+    @if (!status.supported) {
+      <p class="mt-4 text-secondary">
+        Ethernet is not supported on this board. The W5500 LAN module is currently supported on the Bitaxe Gamma 601 only.
+      </p>
+    } @else {
+      <div class="mt-4">
+        <table>
+          @for (row of rows; track trackByLabel($index, row)) {
+            <tr>
+              <td class="text-secondary align-top whitespace-nowrap pr-4 py-1">{{ row.label }}</td>
+              <td class="align-top line-break-anywhere py-1" [ngClass]="row.valueClass || ''">{{ row.value }}</td>
+            </tr>
+          }
+        </table>
+      </div>
+
+      <div class="mt-5">
+        <p class="flex items-center gap-2">
+          <app-checkbox
+            [binary]="true"
+            inputId="ethernetEnabled"
+            [(ngModel)]="enabledSetting"
+            (ngModelChange)="onSettingChange()"></app-checkbox>
+          <label for="ethernetEnabled" class="cursor-pointer">Enable W5500 Ethernet module</label>
+        </p>
+        <p class="text-secondary text-sm mt-2">
+          Requires a restart. While Ethernet is enabled, BAP is disabled because both use GPIO 39/40.
+          Wi-Fi stays configured and is used automatically when the cable is unplugged.
+        </p>
+
+        <div class="flex gap-3 mt-4">
+          <button class="btn btn-primary" [disabled]="!settingTouched" (click)="saveSetting()">Save</button>
+          @if (status.restartRequired && !settingTouched) {
+            <button class="btn btn-secondary" (click)="restartDevice()">Restart now</button>
+          }
+        </div>
+
+        @if (status.restartRequired && !settingTouched) {
+          <p class="text-yellow-500 text-sm mt-3">The saved setting is not active yet. Restart the device to apply it.</p>
+        }
+      </div>
+    }
+  }
+</div>

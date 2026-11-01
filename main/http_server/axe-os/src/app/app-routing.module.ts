@@ -11,6 +11,7 @@ import { SwarmComponent } from './components/swarm/swarm.component';
 import { ScoreboardComponent } from './components/scoreboard/scoreboard.component';
 import { DesignComponent } from './components/design/design.component';
 import { PoolComponent } from './components/pool/pool.component';
+import { EthernetComponent } from './components/ethernet/ethernet.component';
 import { AppLayoutComponent } from './layout/app.layout.component';
 import { ApModeGuard } from './guards/ap-mode.guard';
 
@@ -57,6 +58,11 @@ const routes: Routes = [
         path: 'network',
         component: NetworkComponent,
         title: `${TITLE_PREFIX} Network`,
+      },
+      {
+        path: 'ethernet',
+        component: EthernetComponent,
+        title: `${TITLE_PREFIX} LAN / Ethernet`,
       },
       {
         path: 'settings',

@@ -8,6 +8,7 @@ import {
   SystemInfo as ISystemInfo,
   SystemStatistics as ISystemStatistics,
   SystemAsic as ISystemASIC,
+  EthernetStatus as IEthernetStatus,
   SystemScoreboardEntry as ISystemScoreboardEntry,
   Settings,
   GenericResponse
@@ -486,5 +487,34 @@ export class SystemApiService {
     }).pipe(delay(1000));
   }
 
+  public getEthernetStatus(uri: string = ''): Observable<IEthernetStatus> {
+    if (!environment.mock && this.api && !uri) {
+      return from(this.api.invoke(functions.getEthernetStatus, {})).pipe(timeout(API_TIMEOUT));
+    }
+
+    if (!environment.mock && uri) {
+      return this.httpClient.get<IEthernetStatus>(`${uri}/api/system/ethernet`).pipe(timeout(API_TIMEOUT));
+    }
+
+    return of({
+      supported: true,
+      enabled: true,
+      active: true,
+      restartRequired: false,
+      error: '',
+      linkUp: true,
+      connected: true,
+      dhcp: true,
+      ipv4: '192.168.1.50',
+      netmask: '255.255.255.0',
+      gateway: '192.168.1.1',
+      speedMbps: 100,
+      fullDuplex: true,
+      mac: 'AA:BB:CC:DD:EE:FF',
+      wifiConnected: false,
+      wifiStatus: 'Ethernet connected (Wi-Fi standby)',
+      activeInterface: 'ethernet'
+    } as IEthernetStatus).pipe(delay(500));
+  }
 
 }

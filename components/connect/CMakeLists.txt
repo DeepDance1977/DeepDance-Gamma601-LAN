@@ -10,6 +10,7 @@ REQUIRES
     "nvs_flash"
     "esp_wifi"
     "esp_event"
+    "ethernet"
     "stratum"
     "stratum_v2"
     "espressif__mdns"

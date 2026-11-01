@@ -1,6 +1,7 @@
 #include <string.h>
 #include "device_config.h"
 #include "nvs_config.h"
+#include "ethernet.h"
 #include "global_state.h"
 #include "esp_log.h"
 
@@ -109,5 +110,19 @@ esp_err_t device_config_init(GlobalState * GLOBAL_STATE)
 
     free(board_version);
 
-    return device_pins_init(&GLOBAL_STATE->DEVICE_CONFIG.pins);
+    esp_err_t pins_ret = device_pins_init(&GLOBAL_STATE->DEVICE_CONFIG.pins);
+
+    // The W5500 uses GPIO 39/40, which BAP (UART) also claims. When Ethernet is
+    // enabled on a supported board, BAP is switched off; BAP_init() already treats
+    // pins.bap == NULL as "BAP disabled". Done after device_pins_init() so a Kconfig
+    // BAP pin override cannot bring it back.
+    if (nvs_config_get_bool(NVS_CONFIG_ETHERNET_ENABLED) &&
+        ethernet_board_supported(GLOBAL_STATE->DEVICE_CONFIG.board_version)) {
+        if (GLOBAL_STATE->DEVICE_CONFIG.pins.bap != NULL) {
+            ESP_LOGW(TAG, "Ethernet enabled: BAP disabled (GPIO 39/40 are used by the W5500)");
+        }
+        GLOBAL_STATE->DEVICE_CONFIG.pins.bap = NULL;
+    }
+
+    return pins_ret;
 }

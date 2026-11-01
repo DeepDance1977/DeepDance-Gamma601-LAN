@@ -19,6 +19,11 @@ void protocol_coordinator_notify_failure(void);
 // Resets the "all pools unreachable" failure counter and clears pools_unavailable.
 void protocol_coordinator_notify_success(void);
 
+// Called by the network layer when the active uplink changed (Ethernet <-> Wi-Fi,
+// new IP address). Re-establishes the current pool session on the same pool
+// without counting it as a pool failure. Non-blocking, safe from any task.
+void protocol_coordinator_notify_network_change(void);
+
 // V1 task checks this to know when to shut down gracefully
 bool protocol_coordinator_v1_should_shutdown(void);
 

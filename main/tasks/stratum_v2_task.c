@@ -671,8 +671,8 @@ void stratum_v2_task(void *pvParameters)
             return;
         }
 
-        if (!wifi_is_connected()) {
-            ESP_LOGI(TAG, "WiFi disconnected, waiting...");
+        if (!network_is_connected()) {
+            ESP_LOGI(TAG, "Network disconnected, waiting...");
             vTaskDelay(10000 / portTICK_PERIOD_MS);
             continue;
         }

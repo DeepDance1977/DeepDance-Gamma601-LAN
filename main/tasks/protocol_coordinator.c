@@ -34,6 +34,7 @@ typedef enum {
     COORD_EVENT_PROTOCOL_SUCCESS,
     COORD_EVENT_V1_TASK_EXITED,
     COORD_EVENT_V2_TASK_EXITED,
+    COORD_EVENT_NETWORK_CHANGED,
 } coordinator_event_t;
 
 #define TRANSPORT_TIMEOUT_MS 5000
@@ -81,6 +82,14 @@ void protocol_coordinator_init(GlobalState *gs)
 void protocol_coordinator_notify_failure(void)
 {
     coordinator_event_t evt = COORD_EVENT_PROTOCOL_FAILED;
+    if (s_event_queue) {
+        xQueueSend(s_event_queue, &evt, 0);
+    }
+}
+
+void protocol_coordinator_notify_network_change(void)
+{
+    coordinator_event_t evt = COORD_EVENT_NETWORK_CHANGED;
     if (s_event_queue) {
         xQueueSend(s_event_queue, &evt, 0);
     }
@@ -335,7 +344,7 @@ static void do_heartbeat_probe(GlobalState *gs)
         return;
     }
 
-    if (!wifi_is_connected()) {
+    if (!network_is_connected()) {
         return;
     }
 
@@ -398,7 +407,7 @@ static void resume_on_pool(GlobalState *gs, bool use_fallback)
 // Resumes mining as soon as one is reachable.
 static void try_resume_from_paused(GlobalState *gs)
 {
-    if (!wifi_is_connected()) {
+    if (!network_is_connected()) {
         return;
     }
 
@@ -470,6 +479,24 @@ static void handle_event(GlobalState *gs, coordinator_event_t evt)
             }
             s_consecutive_pool_failures = 0;
             gs->SYSTEM_MODULE.pools_unavailable = false;
+            break;
+
+        case COORD_EVENT_NETWORK_CHANGED:
+            if (s_state == COORD_STATE_IDLE) {
+                break;
+            }
+            if (s_state == COORD_STATE_PAUSED) {
+                // No task is running; probe right away instead of waiting for the next interval.
+                ESP_LOGI(TAG, "Network changed while paused, probing pools now");
+                try_resume_from_paused(gs);
+                break;
+            }
+            // Same pool, same protocol: only the transport underneath changed. The old
+            // socket was bound to the previous interface/address, so restart the session.
+            ESP_LOGI(TAG, "Network changed, re-establishing pool session (state=%d)", s_state);
+            stop_running_task(gs);
+            queue_clear(&gs->stratum_queue);
+            start_protocol_task(gs, s_running_protocol);
             break;
 
         case COORD_EVENT_V1_TASK_EXITED:

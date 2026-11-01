@@ -18,7 +18,9 @@
 #include "esp_wifi_types_generic.h"
 
 #include "connect.h"
+#include "ethernet.h"
 #include "global_state.h"
+#include "protocol_coordinator.h"
 #include "nvs_config.h"
 #include "esp_app_desc.h"
 
@@ -68,15 +70,24 @@ static int clients_connected_to_ap = 0;
 static bool mdns_initialized = false;
 static bool mdns_init_in_progress = false;
 
+// True while the W5500 Ethernet interface provides the uplink (link up + DHCP address).
+// Written only from the default event loop task. While set, Wi-Fi is held disconnected
+// (credentials stay saved) so there is exactly one active uplink.
+static volatile bool s_eth_has_ip = false;
+
 static const char *get_wifi_reason_string(int reason);
 static void wifi_softap_on(void);
 static void wifi_softap_off(void);
+static esp_netif_t * get_active_netif(void);
 
 esp_err_t wifi_apply_hostname(const char *hostname)
 {
     if (hostname == NULL || hostname[0] == '\0') {
         return ESP_ERR_INVALID_ARG;
     }
+
+    // Best effort: keep the Ethernet DHCP hostname in sync (no-op if Ethernet is not running).
+    ethernet_apply_hostname(hostname);
 
     esp_netif_t *esp_netif_sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
     if (esp_netif_sta == NULL) {
@@ -151,10 +162,7 @@ static void initialize_mdns_if_needed(GlobalState *GLOBAL_STATE) {
 
         /* Get current IP */
         esp_netif_ip_info_t ip_info;
-        esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-        if (netif == NULL) {
-            netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
-        }
+        esp_netif_t *netif = get_active_netif();
         char current_ip[16];
         if (netif == NULL || esp_netif_get_ip_info(netif, &ip_info) != ESP_OK || ip_info.ip.addr == 0) {
             ESP_LOGW(TAG, "No active network interface for mDNS init, using 0.0.0.0");
@@ -258,10 +266,7 @@ esp_err_t update_mdns_hostname(const char *new_hostname, GlobalState *GLOBAL_STA
 
     /* Get current IP for conflict checking */
     esp_netif_ip_info_t ip_info;
-    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-    if (netif == NULL) {
-        netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
-    }
+    esp_netif_t *netif = get_active_netif();
     if (netif == NULL || esp_netif_get_ip_info(netif, &ip_info) != ESP_OK) {
         ESP_LOGW(TAG, "No active network interface for mDNS hostname update");
         ip_info.ip.addr = 0;
@@ -429,6 +434,11 @@ static void event_handler(void * arg, esp_event_base_t event_base, int32_t event
                 return;
             }
 
+            if (s_eth_has_ip) {
+                ESP_LOGI(TAG, "Wi-Fi released while Ethernet is the active uplink, not retrying");
+                return;
+            }
+
             ESP_LOGI(TAG, "Could not connect to '%.*s' [rssi %d]: reason %d", event->ssid_len, event->ssid, event->rssi, event->reason);
             if (clients_connected_to_ap > 0) {
                 ESP_LOGI(TAG, "Client(s) connected to AP, not retrying...");
@@ -474,6 +484,12 @@ static void event_handler(void * arg, esp_event_base_t event_base, int32_t event
     }
 
     if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+        if (s_eth_has_ip) {
+            // Wi-Fi finished connecting just as Ethernet became the uplink: release it again.
+            ESP_LOGI(TAG, "Wi-Fi got an address while Ethernet is active, disconnecting Wi-Fi");
+            esp_wifi_disconnect();
+            return;
+        }
         ip_event_got_ip_t * event = (ip_event_got_ip_t *) event_data;
         snprintf(GLOBAL_STATE->SYSTEM_MODULE.ip_addr_str, IP4ADDR_STRLEN_MAX, IPSTR, IP2STR(&event->ip_info.ip));
 
@@ -533,6 +549,180 @@ static void event_handler(void * arg, esp_event_base_t event_base, int32_t event
 
         spawn_mdns_init_if_needed(GLOBAL_STATE);
     }
+}
+
+/* ---------------------------------------------------------------------------
+ * Ethernet (W5500) uplink policy
+ *
+ * Policy lives here, next to the Wi-Fi handling, so the firmware keeps a single
+ * network manager. components/ethernet only owns the interface itself.
+ *
+ *  - Ethernet gets an address  -> it becomes the uplink: Wi-Fi is disconnected
+ *    (credentials kept) and the pool session is re-established over Ethernet.
+ *  - Ethernet link drops       -> Wi-Fi is reconnected immediately and the pool
+ *    session is re-established over Wi-Fi.
+ *  - Ethernet returns          -> it takes over again.
+ *
+ * Link-down (not IP_EVENT_ETH_LOST_IP) is the loss signal on purpose: esp_netif
+ * delays LOST_IP by its IP-lost timer, far too long for a miner.
+ * ------------------------------------------------------------------------- */
+
+static esp_netif_t * get_active_netif(void)
+{
+    esp_netif_t *netif = NULL;
+    if (s_eth_has_ip) {
+        netif = ethernet_get_netif();
+    }
+    if (netif == NULL) {
+        netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    }
+    if (netif == NULL) {
+        netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    }
+    return netif;
+}
+
+static void ethernet_uplink_lost(GlobalState * GLOBAL_STATE)
+{
+    if (!s_eth_has_ip) {
+        return; // already handled (link-down and LOST_IP both arrive)
+    }
+    s_eth_has_ip = false;
+    ESP_LOGW(TAG, "Ethernet uplink lost, falling back to Wi-Fi");
+
+    GLOBAL_STATE->SYSTEM_MODULE.is_connected = false;
+    GLOBAL_STATE->SYSTEM_MODULE.ip_addr_str[0] = '\0';
+    strlcpy(GLOBAL_STATE->SYSTEM_MODULE.wifi_status, "Ethernet lost, switching to Wi-Fi...", sizeof(GLOBAL_STATE->SYSTEM_MODULE.wifi_status));
+
+    if (GLOBAL_STATE->SYSTEM_MODULE.ssid != NULL && strlen(GLOBAL_STATE->SYSTEM_MODULE.ssid) > 0) {
+        esp_err_t err = esp_wifi_connect();
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "esp_wifi_connect failed: %s", esp_err_to_name(err));
+        }
+    } else {
+        // No Wi-Fi configured: bring the setup AP back so the device stays reachable.
+        wifi_softap_on();
+    }
+
+    // Close the dead pool session; the stratum task waits for network_is_connected().
+    protocol_coordinator_notify_network_change();
+}
+
+static void ethernet_event_handler(void * arg, esp_event_base_t event_base, int32_t event_id, void * event_data)
+{
+    GlobalState *GLOBAL_STATE = (GlobalState *)arg;
+
+    if (event_base == IP_EVENT && event_id == IP_EVENT_ETH_GOT_IP) {
+        ip_event_got_ip_t * event = (ip_event_got_ip_t *) event_data;
+        bool uplink_changed = !s_eth_has_ip;
+
+        snprintf(GLOBAL_STATE->SYSTEM_MODULE.ip_addr_str, IP4ADDR_STRLEN_MAX, IPSTR, IP2STR(&event->ip_info.ip));
+        ESP_LOGI(TAG, "Ethernet IPv4 Address: %s", GLOBAL_STATE->SYSTEM_MODULE.ip_addr_str);
+
+        s_eth_has_ip = true;
+        GLOBAL_STATE->SYSTEM_MODULE.is_connected = true;
+        strlcpy(GLOBAL_STATE->SYSTEM_MODULE.wifi_status, "Ethernet connected (Wi-Fi standby)", sizeof(GLOBAL_STATE->SYSTEM_MODULE.wifi_status));
+
+        if (ip_acquire_timer != NULL) {
+            xTimerStop(ip_acquire_timer, 0);
+        }
+
+        if (uplink_changed) {
+            // One active uplink: release Wi-Fi (settings stay saved) and the setup AP.
+            wifi_softap_off();
+            esp_wifi_disconnect();
+            spawn_mdns_init_if_needed(GLOBAL_STATE);
+            protocol_coordinator_notify_network_change();
+        } else if (event->ip_changed) {
+            // DHCP handed out a different address: the old pool socket is dead.
+            protocol_coordinator_notify_network_change();
+        }
+        return;
+    }
+
+    if ((event_base == ETH_EVENT && event_id == ETHERNET_EVENT_DISCONNECTED) ||
+        (event_base == IP_EVENT && event_id == IP_EVENT_ETH_LOST_IP)) {
+        ethernet_uplink_lost(GLOBAL_STATE);
+    }
+}
+
+// The W5500 shares GPIO 39/40 with BAP; board code has already disabled BAP when
+// Ethernet is enabled (see device_config_init). Refuse to start if any other
+// consumer (I2C, LCD, ASIC control, buttons) claims one of the SPI pins.
+static bool ethernet_pins_conflict(GlobalState * GLOBAL_STATE)
+{
+    const int eth_pins[] = { ETHERNET_GPIO_MOSI, ETHERNET_GPIO_MISO, ETHERNET_GPIO_SCLK, ETHERNET_GPIO_CS };
+    const DevicePins *pins = &GLOBAL_STATE->DEVICE_CONFIG.pins;
+
+    int used[16];
+    const char *names[16];
+    int n = 0;
+    if (pins->i2c) {
+        used[n] = pins->i2c->sda; names[n++] = "I2C SDA";
+        used[n] = pins->i2c->scl; names[n++] = "I2C SCL";
+    }
+    if (pins->i80) {
+        for (int i = 0; i < 8; i++) {
+            used[n] = pins->i80->data[i]; names[n++] = "LCD data";
+        }
+    }
+    used[n] = CONFIG_GPIO_ASIC_RESET;  names[n++] = "ASIC reset";
+    used[n] = CONFIG_GPIO_ASIC_ENABLE; names[n++] = "ASIC enable";
+    used[n] = CONFIG_GPIO_PLUG_SENSE;  names[n++] = "plug sense";
+    used[n] = CONFIG_GPIO_BUTTON_BOOT; names[n++] = "boot button";
+
+    for (int i = 0; i < n; i++) {
+        for (size_t j = 0; j < sizeof(eth_pins) / sizeof(eth_pins[0]); j++) {
+            if (used[i] == eth_pins[j]) {
+                ESP_LOGE(TAG, "Ethernet disabled: GPIO %d is used by %s", used[i], names[i]);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static void start_ethernet_if_enabled(GlobalState * GLOBAL_STATE)
+{
+    if (!nvs_config_get_bool(NVS_CONFIG_ETHERNET_ENABLED)) {
+        return;
+    }
+    if (!ethernet_board_supported(GLOBAL_STATE->DEVICE_CONFIG.board_version)) {
+        ESP_LOGW(TAG, "Ethernet is enabled in the settings but not supported on board %s, ignoring",
+                 GLOBAL_STATE->DEVICE_CONFIG.board_version);
+        return;
+    }
+    if (ethernet_pins_conflict(GLOBAL_STATE)) {
+        return;
+    }
+
+    ESP_ERROR_CHECK(esp_event_handler_register(ETH_EVENT, ESP_EVENT_ANY_ID, &ethernet_event_handler, GLOBAL_STATE));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_GOT_IP, &ethernet_event_handler, GLOBAL_STATE));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_LOST_IP, &ethernet_event_handler, GLOBAL_STATE));
+
+    char * hostname = nvs_config_get_string(NVS_CONFIG_HOSTNAME);
+    esp_err_t err = ethernet_start(hostname);
+    free(hostname);
+    if (err != ESP_OK) {
+        // Not fatal: the miner simply keeps running on Wi-Fi.
+        ESP_LOGE(TAG, "Ethernet start failed (%s), continuing with Wi-Fi only", esp_err_to_name(err));
+    }
+}
+
+bool network_is_connected(void)
+{
+    return s_eth_has_ip || wifi_is_connected();
+}
+
+network_interface_t network_get_active_interface(void)
+{
+    if (s_eth_has_ip) {
+        return NETWORK_INTERFACE_ETHERNET;
+    }
+    if (wifi_is_connected()) {
+        return NETWORK_INTERFACE_WIFI;
+    }
+    return NETWORK_INTERFACE_NONE;
 }
 
 esp_netif_t * wifi_init_softap(GlobalState * GLOBAL_STATE)
@@ -748,6 +938,7 @@ void wifi_init(GlobalState * GLOBAL_STATE)
         /* Disable power savings for best performance */
         ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
 
+        start_ethernet_if_enabled(GLOBAL_STATE);
         return;
     } else {
 
@@ -778,6 +969,8 @@ void wifi_init(GlobalState * GLOBAL_STATE)
         ESP_ERROR_CHECK(esp_wifi_start());
 
         ESP_LOGI(TAG, "wifi_init_sta finished.");
+
+        start_ethernet_if_enabled(GLOBAL_STATE);
     }
 }
 

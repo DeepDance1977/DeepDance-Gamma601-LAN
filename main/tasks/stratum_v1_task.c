@@ -233,8 +233,8 @@ void stratum_v1_task(void *pvParameters)
             continue;
         }
 
-        if (!wifi_is_connected()) {
-            ESP_LOGI(TAG, "WiFi disconnected, attempting to reconnect...");
+        if (!network_is_connected()) {
+            ESP_LOGI(TAG, "Network disconnected, waiting for an uplink...");
             vTaskDelay(10000 / portTICK_PERIOD_MS);
             continue;
         }

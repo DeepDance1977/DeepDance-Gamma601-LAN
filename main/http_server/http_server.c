@@ -33,6 +33,7 @@
 #include "connect.h"
 #include "statistics_task.h"
 #include "theme_api.h"
+#include "ethernet_api.h"
 #include "axe-os/api/system/asic_settings.h"
 #include "display.h"
 #include "mdns.h"
@@ -1852,7 +1853,8 @@ esp_err_t start_rest_server(GlobalState * global_state)
     config.uri_match_fn = httpd_uri_match_wildcard;
     config.stack_size = 8192;
     config.max_open_sockets = 20;
-    config.max_uri_handlers = 25;
+    // 25 handlers were already registered upstream; /api/system/ethernet needs one more.
+    config.max_uri_handlers = 28;
     config.close_fn = websocket_close_fn;
     config.lru_purge_enable = true;
     config.keep_alive_enable = true;
@@ -1881,6 +1883,9 @@ esp_err_t start_rest_server(GlobalState * global_state)
     
     // Register theme API endpoints
     ESP_ERROR_CHECK(register_theme_api_endpoints(server, rest_context));
+
+    // Register Ethernet status endpoint (GET /api/system/ethernet)
+    ESP_ERROR_CHECK(register_ethernet_api_endpoints(server, rest_context, GLOBAL_STATE));
 
     /* URI handler for fetching system info */
     httpd_uri_t system_info_get_uri = {

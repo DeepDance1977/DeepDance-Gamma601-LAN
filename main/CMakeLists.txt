@@ -36,6 +36,7 @@ SRCS
     "./http_server/cjson_utils.c"
     "./http_server/system_api_json.c"
     "./http_server/theme_api.c"
+    "./http_server/ethernet_api.c"
     "./http_server/axe-os/api/system/asic_settings.c"
     "./self_test/self_test.c"
     "./tasks/stratum_v1_task.c"
@@ -78,6 +79,7 @@ REQUIRES
     "asic"
     "connect"
     "dns_server"
+    "ethernet"
     "stratum"
     "stratum_v2"
 

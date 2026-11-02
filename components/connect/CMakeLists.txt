@@ -11,6 +11,7 @@ REQUIRES
     "esp_wifi"
     "esp_event"
     "esp_eth"
+    "esp_eth"
     "ethernet"
     "stratum"
     "stratum_v2"

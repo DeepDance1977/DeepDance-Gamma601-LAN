@@ -18,6 +18,7 @@
 #include "esp_wifi_types_generic.h"
 
 #include "connect.h"
+#include "esp_eth.h"
 #include "ethernet.h"
 #include "global_state.h"
 #include "protocol_coordinator.h"
